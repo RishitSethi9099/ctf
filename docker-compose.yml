@@ -1,0 +1,22 @@
+version: "3.9"
+
+services:
+  frontend:
+    image: ctfsfrontend
+    container_name: ctfsfrontend
+    working_dir: /app
+    volumes:
+      - .:/app
+    ports:
+      - "3000:3000"
+    command: npm run dev
+  
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+volumes:
+  redis_data:

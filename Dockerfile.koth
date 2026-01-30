@@ -1,0 +1,181 @@
+# Dockerfile for KOTH Vulnerable Machine
+FROM ubuntu:20.04
+
+# Avoid interactive prompts during build
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install basic packages
+RUN apt-get update && apt-get install -y \\
+    openssh-server \\
+    mysql-server \\
+    apache2 \\
+    php \\
+    vim \\
+    nano \\
+    curl \\
+    wget \\
+    netcat \\
+    nmap \\
+    sudo \\
+    cron \\
+    net-tools \\
+    && rm -rf /var/lib/apt/lists/*
+
+# Create vulnerable user accounts
+RUN useradd -m -s /bin/bash user && \\
+    echo "user:password123" | chpasswd && \\
+    useradd -m -s /bin/bash admin && \\
+    echo "admin:admin123" | chpasswd && \\
+    usermod -aG sudo admin
+
+# Create vulnerable files and directories
+RUN mkdir -p /home/user/backups /var/secrets /tmp/exploits
+
+# Add vulnerable configuration files
+COPY <<EOF /etc/mysql/mysql.conf.d/vulnerable.cnf
+[mysqld]
+# Vulnerable MySQL configuration
+bind-address = 0.0.0.0
+general_log = 1
+general_log_file = /var/log/mysql/general.log
+EOF
+
+# Create vulnerable web application
+COPY <<EOF /var/www/html/login.php
+<?php
+// Vulnerable login page with SQL injection
+\\$username = \\$_POST['username'];
+\\$password = \\$_POST['password'];
+
+// Intentionally vulnerable SQL query
+\\$query = "SELECT * FROM users WHERE username='\\$username' AND password='\\$password'";
+// ... vulnerable code continues
+?>
+EOF
+
+# Create flag files
+RUN echo "CTF{koth_user_flag_easy}" > /home/user/user_flag.txt && \\
+    echo "CTF{koth_admin_flag_hard}" > /root/admin_flag.txt && \\
+    chmod 644 /home/user/user_flag.txt && \\
+    chmod 600 /root/admin_flag.txt
+
+# Create vulnerable SUID binary
+COPY <<EOF /tmp/create_vuln_binary.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+int main() {
+    setuid(0);
+    system("/bin/bash");
+    return 0;
+}
+EOF
+
+RUN gcc /tmp/create_vuln_binary.c -o /usr/local/bin/vulnerable_binary && \\
+    chmod 4755 /usr/local/bin/vulnerable_binary
+
+# Create vulnerable cron job
+RUN echo "*/1 * * * * root /tmp/cleanup.sh" >> /etc/crontab
+
+COPY <<EOF /tmp/cleanup.sh
+#!/bin/bash
+# Vulnerable cleanup script
+rm -f /tmp/*.tmp
+# More vulnerable operations...
+EOF
+RUN chmod +x /tmp/cleanup.sh
+
+# Create SSH keys with weak permissions
+RUN ssh-keygen -t rsa -b 2048 -f /home/admin/.ssh/id_rsa -N "" && \\
+    chmod 644 /home/admin/.ssh/id_rsa  # Intentionally weak permissions
+
+# Add vulnerable service
+COPY <<EOF /etc/systemd/system/vulnerable-service.service
+[Unit]
+Description=Vulnerable Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/vulnerable_service
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+COPY <<EOF /usr/local/bin/vulnerable_service
+#!/bin/bash
+while true; do
+    echo "Vulnerable service running on port 9999"
+    nc -l -p 9999 -e /bin/bash
+    sleep 1
+done
+EOF
+RUN chmod +x /usr/local/bin/vulnerable_service
+
+# Create database with vulnerable data
+RUN service mysql start && \\
+    mysql -e "CREATE DATABASE vulnerable_db;" && \\
+    mysql -e "CREATE USER 'webuser'@'%' IDENTIFIED BY 'weakpassword';" && \\
+    mysql -e "GRANT ALL PRIVILEGES ON vulnerable_db.* TO 'webuser'@'%';" && \\
+    mysql -e "USE vulnerable_db; CREATE TABLE users (id INT, username VARCHAR(50), password VARCHAR(50), is_admin BOOLEAN);" && \\
+    mysql -e "USE vulnerable_db; INSERT INTO users VALUES (1, 'admin', 'password', TRUE), (2, 'user', '123456', FALSE);"
+
+# Configure SSH for easier access
+RUN sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config && \\
+    sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
+
+# Add some helpful files for players
+COPY <<EOF /home/user/README.txt
+Welcome to the KOTH Vulnerable Machine!
+
+Your objective is to gain root access and maintain it.
+
+Hint: Look for:
+- Weak file permissions
+- Vulnerable services
+- Default passwords  
+- SQL injection opportunities
+- Buffer overflow vulnerabilities
+- Privilege escalation paths
+
+Good luck!
+EOF
+
+COPY <<EOF /home/user/services.txt
+Running Services:
+- SSH (port 22) - admin:admin123
+- MySQL (port 3306) - webuser:weakpassword
+- Apache (port 80) - Check for web vulnerabilities
+- Vulnerable Service (port 9999) - Direct shell access?
+- Cron jobs - Check /etc/crontab
+
+Files of Interest:
+- /etc/passwd - User information
+- /var/log/* - Log files
+- /tmp/* - Temporary files
+- ~/.ssh/* - SSH keys
+EOF
+
+# Expose common ports
+EXPOSE 22 80 3306 9999
+
+# Create startup script
+COPY <<EOF /startup.sh
+#!/bin/bash
+service ssh start
+service apache2 start  
+service mysql start
+systemctl enable vulnerable-service
+systemctl start vulnerable-service
+service cron start
+
+# Keep container running
+tail -f /dev/null
+EOF
+RUN chmod +x /startup.sh
+
+CMD ["/startup.sh"]
